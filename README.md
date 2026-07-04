@@ -117,18 +117,9 @@ The APK will be created at:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-For sharing with other users, prefer publishing APK files through GitHub Releases instead of committing APKs into the repository. APKs are generated binaries, can become large, and are harder to review in source control.
+If you want to skip the hard part, you can download directly the last APK version from the following url:
 
-Suggested release flow:
-
-1. Build the APK locally.
-2. Create a GitHub Release for the project.
-3. Upload `app-debug.apk` or a signed release APK as a release asset.
-4. Link users to the latest release:
-
-   ```text
-   https://github.com/<your-user>/<your-repo>/releases/latest
-   ```
+- https://github.com/alexiszorba25/tvtracker/releases/latest
 
 Users who install APKs directly may need to allow installation from unknown sources on their Android device.
 
