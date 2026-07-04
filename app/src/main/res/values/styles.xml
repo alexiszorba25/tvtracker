@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.TVTracker" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#E9F5FF</item>
+        <item name="android:statusBarColor">#E9F5FF</item>
+    </style>
+</resources>
