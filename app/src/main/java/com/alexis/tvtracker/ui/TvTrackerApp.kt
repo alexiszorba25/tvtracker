@@ -114,7 +114,7 @@ fun TvTrackerApp(container: AppContainer) {
                             }
                         },
                         icon = {},
-                        label = { Text("Library") },
+                        label = { Text("Watch Next") },
                     )
                     NavigationBarItem(
                         selected = route == Screen.Search.route,
@@ -151,6 +151,7 @@ fun TvTrackerApp(container: AppContainer) {
                         tvTimeExportRepository = container.tvTimeExportRepository,
                         apiKeyRepository = container.apiKeyRepository,
                         uiSettingsRepository = container.uiSettingsRepository,
+                        applicationContext = container.applicationContext,
                     ),
                 )
                 LibraryScreen(

@@ -22,6 +22,8 @@ data class TvDetailsUiState(
     val loading: Boolean = true,
     val title: String = "",
     val overview: String = "",
+    val posterPath: String? = null,
+    val yearRange: String? = null,
     val voteAverage: Double? = null,
     val cast: String? = null,
     val seasons: List<TmdbSeasonSummary> = emptyList(),
@@ -40,6 +42,8 @@ private data class RemoteTvState(
     val loading: Boolean = true,
     val title: String = "",
     val overview: String = "",
+    val posterPath: String? = null,
+    val yearRange: String? = null,
     val voteAverage: Double? = null,
     val cast: String? = null,
     val seasons: List<TmdbSeasonSummary> = emptyList(),
@@ -133,6 +137,8 @@ class TvDetailsViewModel(
                             loading = false,
                             title = details.name,
                             overview = details.overview.orEmpty(),
+                            posterPath = details.posterPath,
+                            yearRange = details.yearRange(),
                             voteAverage = details.voteAverage,
                             cast = details.credits?.cast?.mainCast(),
                             seasons = seasons,
@@ -172,6 +178,8 @@ private fun RemoteTvState.toUiState(watched: List<WatchedEpisodeEntity>): TvDeta
         loading = loading,
         title = title,
         overview = overview,
+        posterPath = posterPath,
+        yearRange = yearRange,
         voteAverage = voteAverage,
         cast = cast,
         seasons = seasons,
@@ -180,4 +188,16 @@ private fun RemoteTvState.toUiState(watched: List<WatchedEpisodeEntity>): TvDeta
         watchedEpisodes = watched.map { EpisodeKey(it.seasonNumber, it.episodeNumber) }.toSet(),
         error = error,
     )
+}
+
+private fun com.alexis.tvtracker.data.remote.TmdbTvDetails.yearRange(): String? {
+    val firstYear = firstAirDate?.takeIf { it.length >= 4 }?.take(4)
+    val lastYear = lastAirDate?.takeIf { it.length >= 4 }?.take(4)
+    return when {
+        firstYear == null -> null
+        status == "Ended" && lastYear != null && lastYear != firstYear -> "$firstYear-$lastYear"
+        status == "Ended" -> firstYear
+        lastYear != null && lastYear != firstYear -> "$firstYear-$lastYear"
+        else -> "$firstYear-"
+    }
 }

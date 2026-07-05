@@ -27,6 +27,9 @@ data class TmdbTvDetails(
     val name: String,
     val overview: String?,
     @Json(name = "poster_path") val posterPath: String?,
+    @Json(name = "first_air_date") val firstAirDate: String?,
+    @Json(name = "last_air_date") val lastAirDate: String?,
+    val status: String?,
     @Json(name = "vote_average") val voteAverage: Double?,
     val seasons: List<TmdbSeasonSummary> = emptyList(),
     val credits: TmdbCredits?,
@@ -71,5 +74,6 @@ data class TmdbEpisode(
     val overview: String?,
     @Json(name = "episode_number") val episodeNumber: Int,
     @Json(name = "air_date") val airDate: String?,
+    @Json(name = "still_path") val stillPath: String?,
     @Json(name = "vote_average") val voteAverage: Double?,
 )

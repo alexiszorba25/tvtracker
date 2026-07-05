@@ -10,4 +10,5 @@ data class WatchedEpisodeEntity(
     val showId: Int,
     val seasonNumber: Int,
     val episodeNumber: Int,
+    val watchedAtMillis: Long = 0L,
 )

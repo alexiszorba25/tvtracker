@@ -9,8 +9,9 @@ import androidx.room.TypeConverters
         LibraryItemEntity::class,
         WatchedEpisodeEntity::class,
         CachedEpisodeEntity::class,
+        EpisodeMetadataStatusEntity::class,
     ],
-    version = 3,
+    version = 6,
     exportSchema = false,
 )
 @TypeConverters(RoomConverters::class)

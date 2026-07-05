@@ -1,16 +1,20 @@
 package com.alexis.tvtracker.ui.tv
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -25,11 +29,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.alexis.tvtracker.data.remote.TmdbEpisode
-import com.alexis.tvtracker.ui.common.MetadataBlock
+import com.alexis.tvtracker.ui.common.MediaPoster
 import com.alexis.tvtracker.ui.common.RatingText
 import com.alexis.tvtracker.util.hasAired
 
@@ -47,23 +55,57 @@ fun TvDetailsScreen(viewModel: TvDetailsViewModel, onBack: () -> Unit) {
             Text("Back")
         }
 
-        Text(
-            text = state.title.ifBlank { "Series" },
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.width(96.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                MediaPoster(
+                    posterPath = state.posterPath,
+                    title = state.title.ifBlank { "Series" },
+                    modifier = Modifier.size(width = 96.dp, height = 144.dp),
+                )
+                PosterMetadata(voteAverage = state.voteAverage, yearRange = state.yearRange)
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = state.title.ifBlank { "Series" },
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    ),
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
 
-        if (state.overview.isNotBlank()) {
-            Text(
-                text = state.overview,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis,
-            )
+                if (state.overview.isNotBlank()) {
+                    Text(
+                        text = state.overview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                state.cast?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
-
-        MetadataBlock(voteAverage = state.voteAverage, cast = state.cast)
 
         state.error?.let {
             InfoPanel(it)
@@ -129,6 +171,25 @@ fun TvDetailsScreen(viewModel: TvDetailsViewModel, onBack: () -> Unit) {
 }
 
 @Composable
+private fun PosterMetadata(voteAverage: Double?, yearRange: String?) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RatingText(voteAverage, style = MaterialTheme.typography.labelSmall)
+        yearRange?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun EpisodeRow(
     episode: TmdbEpisode,
     watched: Boolean,
@@ -151,36 +212,89 @@ private fun EpisodeRow(
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.Top,
         ) {
+            Column(
+                modifier = Modifier.width(112.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                EpisodeStill(
+                    stillPath = episode.stillPath,
+                    title = episode.name,
+                    modifier = Modifier.size(width = 112.dp, height = 72.dp),
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RatingText(
+                        voteAverage = episode.voteAverage,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    episode.airDate?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = if (available) it else "$it - not aired yet",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = "E${episode.episodeNumber} ${episode.name}",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    ),
+                    fontWeight = FontWeight.Normal,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = episode.overview.orEmpty().ifBlank { "No overview available." },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Checkbox(
                 checked = watched,
                 enabled = available,
                 onCheckedChange = onWatchedChange,
             )
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "E${episode.episodeNumber} ${episode.name}",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                RatingText(episode.voteAverage)
-                episode.airDate?.takeIf { it.isNotBlank() }?.let {
-                    Text(
-                        text = if (available) it else "$it · not aired yet",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Text(
-                    text = episode.overview.orEmpty().ifBlank { "No overview available." },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeStill(stillPath: String?, title: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (stillPath != null) {
+            AsyncImage(
+                model = "https://image.tmdb.org/t/p/w300$stillPath",
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                text = "E",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

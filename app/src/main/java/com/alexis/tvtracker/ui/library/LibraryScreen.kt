@@ -1,15 +1,17 @@
 package com.alexis.tvtracker.ui.library
 
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,15 +19,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -34,8 +34,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -47,27 +47,44 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.alexis.tvtracker.data.NextEpisode
 import com.alexis.tvtracker.data.ThemeMode
 import com.alexis.tvtracker.data.TvTimeImportFile
+import com.alexis.tvtracker.data.TvTimeImportProgress
 import com.alexis.tvtracker.data.local.LibraryItemEntity
-import com.alexis.tvtracker.model.MediaType
 import com.alexis.tvtracker.ui.common.AppHeader
 import com.alexis.tvtracker.ui.common.ChromeVisibility
-import com.alexis.tvtracker.ui.common.MetadataBlock
 import com.alexis.tvtracker.ui.common.MediaPoster
 import com.alexis.tvtracker.ui.common.RatingText
 import com.alexis.tvtracker.ui.common.MoreVertButton
 import com.alexis.tvtracker.ui.label
-import com.alexis.tvtracker.util.isReleased
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipInputStream
+import kotlinx.coroutines.delay
 
 @Composable
 fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv: (Int) -> Unit) {
     val state by viewModel.uiState.collectAsState()
-    val library = state.filteredItems
+    val activeItems = when (state.watchNextFilter) {
+        WatchNextFilter.ContinueWatching -> state.continueWatchingItems
+        WatchNextFilter.UpToDate -> state.upToDateItems
+    }
+    val hasVisibleItems = activeItems.isNotEmpty() ||
+        (state.watchNextFilter == WatchNextFilter.ContinueWatching && state.staleWatchingItems.isNotEmpty())
+    val continueWatchingListState = rememberLazyListState()
+    val upToDateListState = rememberLazyListState()
+    val activeListState = when (state.watchNextFilter) {
+        WatchNextFilter.ContinueWatching -> continueWatchingListState
+        WatchNextFilter.UpToDate -> upToDateListState
+    }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     var showImportDialog by remember { mutableStateOf(false) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -76,7 +93,7 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
-        val files = uris.mapNotNull { uri -> context.readImportFile(uri) }
+        val files = uris.flatMap { uri -> context.readImportFiles(uri) }
         if (files.isNotEmpty()) {
             viewModel.importTvTime(files)
         }
@@ -92,6 +109,18 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
         viewModel.consumePreparedExport()
     }
 
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.resumeBackgroundWork()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     LaunchedEffect(state.importMessage) {
         val message = state.importMessage
         if (message != null) {
@@ -100,11 +129,36 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
         }
     }
 
+    LaunchedEffect(state.tvTimeImportWork?.id, state.tvTimeImportWork?.successMessage) {
+        val workState = state.tvTimeImportWork
+        val message = workState?.successMessage
+        if (workState != null && message != null && viewModel.shouldShowTvTimeImportWorkMessage(workState.id)) {
+            snackbarHostState.showSnackbar(message)
+            viewModel.consumeTvTimeImportWorkMessage(workState.id)
+        }
+    }
+
+    LaunchedEffect(state.tvTimeImportWork?.id, state.tvTimeImportWork?.failureMessage) {
+        val workState = state.tvTimeImportWork
+        val message = workState?.failureMessage
+        if (workState != null && message != null && viewModel.shouldShowTvTimeImportWorkMessage(workState.id)) {
+            snackbarHostState.showSnackbar(message)
+            viewModel.consumeTvTimeImportWorkMessage(workState.id)
+        }
+    }
+
     LaunchedEffect(state.pendingExportZip) {
         val zip = state.pendingExportZip
         if (zip != null) {
             pendingZip = zip
             exportLauncher.launch("tv-tracker-export.zip")
+        }
+    }
+
+    LaunchedEffect(state.postImportMessage) {
+        if (state.postImportMessage != null) {
+            delay(3_000)
+            viewModel.clearPostImportMessage()
         }
     }
 
@@ -119,6 +173,8 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
                         "text/comma-separated-values",
                         "application/csv",
                         "application/vnd.ms-excel",
+                        "application/zip",
+                        "application/x-zip-compressed",
                     ),
                 )
             },
@@ -159,8 +215,8 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
             ChromeVisibility(visible = chromeVisible) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     LibraryHeader(
-                        busy = state.importing || state.exporting,
-                        importing = state.importing,
+                        busy = state.isImporting || state.exporting,
+                        importing = state.isImporting,
                         exporting = state.exporting,
                         onImport = { showImportDialog = true },
                         onExport = viewModel::prepareExport,
@@ -168,46 +224,86 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
                         onTheme = { showThemeDialog = true },
                     )
 
-                    if (state.importing) {
-                        ImportingBanner()
+                    if (state.isImporting) {
+                        ImportingBanner(progress = state.activeImportProgress)
                     }
+
+                    state.postImportMessage?.let {
+                        PostImportBanner(message = it)
+                    }
+
+                    state.episodeMetadataWork
+                        ?.takeIf { it.isActive || it.hasFailed }
+                        ?.let { workState ->
+                            EpisodeMetadataBanner(workState)
+                        }
 
                     LibraryFilters(
                         query = state.query,
-                        hideWatched = state.hideWatched,
-                        typeFilter = state.typeFilter,
+                        selectedFilter = state.watchNextFilter,
                         onQueryChange = viewModel::setQuery,
-                        onHideWatchedChange = viewModel::setHideWatched,
-                        onTypeFilterChange = viewModel::setTypeFilter,
+                        onFilterChange = viewModel::setWatchNextFilter,
                     )
                 }
             }
 
             if (state.items.isEmpty()) {
                 EmptyLibrary(hasApiKey = state.tmdbApiKey.isNotBlank())
-            } else if (library.isEmpty()) {
+            } else if (!hasVisibleItems) {
                 EmptyFilteredLibrary()
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(
+                    state = activeListState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     items(
-                        items = library,
-                        key = { "${it.mediaType}-${it.tmdbId}" },
+                        items = activeItems,
+                        key = { "${state.watchNextFilter}-${it.tmdbId}" },
                     ) { item ->
-                        LibraryRow(
+                        WatchNextRow(
                             item = item,
-                            onOpen = {
-                                if (item.mediaType == MediaType.Tv) onOpenTv(item.tmdbId)
-                            },
-                            onWatchedChange = { watched ->
-                                viewModel.setWatched(item.tmdbId, item.mediaType, watched)
-                            },
-                            canMarkWatched = item.mediaType == MediaType.Tv || isReleased(item.releaseDate),
                             nextEpisode = state.nextEpisodes[item.tmdbId],
-                            onWatchNext = { nextEpisode ->
-                                viewModel.markNextEpisodeWatched(nextEpisode)
-                            },
-                            onRemove = { viewModel.remove(item.tmdbId, item.mediaType) },
+                            metadataLoading = item.tmdbId in state.loadingEpisodeMetadataShowIds,
+                            onOpen = { onOpenTv(item.tmdbId) },
+                            onWatchNext = viewModel::markNextEpisodeWatched,
                         )
+                    }
+                    if (
+                        state.watchNextFilter == WatchNextFilter.ContinueWatching &&
+                        state.staleWatchingItems.isNotEmpty()
+                    ) {
+                        item(key = "stale-heading") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 18.dp, bottom = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Haven't Watched In A While",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = state.staleWatchingItems.size.toString(),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        items(
+                            items = state.staleWatchingItems,
+                            key = { "stale-${it.tmdbId}" },
+                        ) { item ->
+                            WatchNextRow(
+                                item = item,
+                                nextEpisode = state.nextEpisodes[item.tmdbId],
+                                metadataLoading = item.tmdbId in state.loadingEpisodeMetadataShowIds,
+                                onOpen = { onOpenTv(item.tmdbId) },
+                                onWatchNext = viewModel::markNextEpisodeWatched,
+                            )
+                        }
                     }
                 }
             }
@@ -216,7 +312,74 @@ fun LibraryScreen(viewModel: LibraryViewModel, chromeVisible: Boolean, onOpenTv:
 }
 
 @Composable
-private fun ImportingBanner() {
+private fun EpisodeMetadataBanner(workState: EpisodeMetadataWorkState) {
+    val isActive = workState.isActive
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 2.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = if (isActive) {
+                    "Loading episode metadata in background..."
+                } else {
+                    "Episode metadata loading stopped."
+                },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = when {
+                    isActive && workState.totalShows > 0 && workState.currentShow.isNotBlank() ->
+                        "Caching ${workState.processedShows}/${workState.totalShows}: ${workState.currentShow}"
+                    isActive && workState.totalShows > 0 ->
+                        "Caching ${workState.processedShows}/${workState.totalShows} shows"
+                    isActive ->
+                        "Waiting for network..."
+                    else ->
+                        "Open the app again or run the TV Time import to retry."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (isActive && workState.totalShows > 0) {
+                LinearProgressIndicator(
+                    progress = {
+                        workState.processedShows.toFloat() / workState.totalShows.toFloat()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else if (isActive) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun PostImportBanner(message: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 2.dp,
+    ) {
+        Text(
+            text = message,
+            modifier = Modifier.padding(12.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ImportingBanner(progress: TvTimeImportProgress?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
@@ -232,11 +395,24 @@ private fun ImportingBanner() {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "This can take a few minutes while shows are matched and episodes are saved.",
+                text = if (progress == null) {
+                    "Preparing TV Time import..."
+                } else {
+                    "Importing ${progress.processedShows}/${progress.totalShows}: ${progress.currentShow}"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            if (progress == null || progress.totalShows <= 0) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(
+                    progress = { progress.processedShows.toFloat() / progress.totalShows.toFloat() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
@@ -248,7 +424,7 @@ private fun ImportTvTimeDialog(onDismiss: () -> Unit, onContinue: () -> Unit) {
         title = { Text("Import from TV Time") },
         text = {
             Text(
-                "Select the two CSV files from your TV Time data export: user_tv_show_data.csv and seen_episode_source.csv. The app will import watched series and episodes into your local library.",
+                "Select a TV Tracker export ZIP, or select user_tv_show_data.csv and seen_episode_source.csv. For better episode history and recent activity, also include tracking-prod-records-v2.csv and show_seen_episode_latest.csv.",
             )
         },
         confirmButton = {
@@ -394,69 +570,105 @@ private fun LibraryHeader(
 @Composable
 private fun LibraryFilters(
     query: String,
-    hideWatched: Boolean,
-    typeFilter: LibraryTypeFilter,
+    selectedFilter: WatchNextFilter,
     onQueryChange: (String) -> Unit,
-    onHideWatchedChange: (Boolean) -> Unit,
-    onTypeFilterChange: (LibraryTypeFilter) -> Unit,
+    onFilterChange: (WatchNextFilter) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
-            label = { Text("Filter library") },
+            label = { Text("Search Library") },
             singleLine = true,
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(
+        Surface(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(
-                    selected = typeFilter == LibraryTypeFilter.All,
-                    onClick = { onTypeFilterChange(LibraryTypeFilter.All) },
-                    label = { Text("All") },
-                )
-                FilterChip(
-                    selected = typeFilter == LibraryTypeFilter.Series,
-                    onClick = { onTypeFilterChange(LibraryTypeFilter.Series) },
-                    label = { Text("TV") },
-                )
-                FilterChip(
-                    selected = typeFilter == LibraryTypeFilter.Movies,
-                    onClick = { onTypeFilterChange(LibraryTypeFilter.Movies) },
-                    label = { Text("Film") },
-                )
-            }
-            Row(
+                modifier = Modifier.padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Watched", style = MaterialTheme.typography.bodySmall)
-                Switch(
-                    checked = !hideWatched,
-                    onCheckedChange = { showWatched -> onHideWatchedChange(!showWatched) },
+                FilterChip(
+                    selected = selectedFilter == WatchNextFilter.ContinueWatching,
+                    onClick = { onFilterChange(WatchNextFilter.ContinueWatching) },
+                    label = {
+                        Text(
+                            text = "Continue Watching",
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                FilterChip(
+                    selected = selectedFilter == WatchNextFilter.UpToDate,
+                    onClick = { onFilterChange(WatchNextFilter.UpToDate) },
+                    label = {
+                        Text(
+                            text = "Up To Date",
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
     }
 }
 
-private fun android.content.Context.readImportFile(uri: Uri): TvTimeImportFile? {
+private fun android.content.Context.readImportFiles(uri: Uri): List<TvTimeImportFile> {
     val name = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-        val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
         if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-    } ?: return null
+    } ?: return emptyList()
 
-    val content = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-        ?: return null
-    return TvTimeImportFile(name = name, content = content)
+    return if (name.endsWith(".zip", ignoreCase = true)) {
+        readImportZip(uri)
+    } else {
+        val content = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            ?: return emptyList()
+        listOf(TvTimeImportFile(name = name, content = content))
+    }
+}
+
+private fun android.content.Context.readImportZip(uri: Uri): List<TvTimeImportFile> {
+    return runCatching {
+        contentResolver.openInputStream(uri)?.use { input ->
+            ZipInputStream(input).use { zip ->
+                buildList {
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory && entry.name.endsWith(".csv", ignoreCase = true)) {
+                            add(
+                                TvTimeImportFile(
+                                    name = entry.name.substringAfterLast('/').substringAfterLast('\\'),
+                                    content = zip.readCurrentEntryText(),
+                                ),
+                            )
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+        }.orEmpty()
+    }.getOrDefault(emptyList())
+}
+
+private fun ZipInputStream.readCurrentEntryText(): String {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    while (true) {
+        val read = read(buffer)
+        if (read <= 0) break
+        output.write(buffer, 0, read)
+    }
+    return output.toString(Charsets.UTF_8.name())
 }
 
 private fun android.content.Context.writeExportFile(uri: Uri, bytes: ByteArray): Boolean {
@@ -507,117 +719,110 @@ private fun EmptyFilteredLibrary() {
 }
 
 @Composable
-private fun LibraryRow(
+private fun WatchNextRow(
     item: LibraryItemEntity,
-    onOpen: () -> Unit,
-    onWatchedChange: (Boolean) -> Unit,
-    canMarkWatched: Boolean,
     nextEpisode: NextEpisode?,
+    metadataLoading: Boolean,
+    onOpen: () -> Unit,
     onWatchNext: (NextEpisode) -> Unit,
-    onRemove: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         tonalElevation = 2.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = item.mediaType == MediaType.Tv, onClick = onOpen),
+            .animateContentSize(animationSpec = tween(180, easing = FastOutSlowInEasing)),
     ) {
         Row(
-            modifier = Modifier.padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            modifier = Modifier.padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             MediaPoster(
                 posterPath = item.posterPath,
                 title = item.title,
-                modifier = Modifier.size(width = 72.dp, height = 108.dp),
+                modifier = Modifier
+                    .size(width = 88.dp, height = 132.dp)
+                    .clickable(onClick = onOpen),
             )
             Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onOpen),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = item.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = onRemove) {
-                        Text("X")
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AssistChip(onClick = {}, label = { Text(item.mediaType.label()) })
-                    item.releaseDate?.takeIf { it.isNotBlank() }?.let {
-                        AssistChip(onClick = {}, label = { Text(it.take(4)) })
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MetadataText(text = item.mediaType.label())
+                    item.releaseDate?.takeIf { it.length >= 4 }?.let { date ->
+                        MetadataText(text = date.take(4))
                     }
                     RatingText(item.voteAverage)
                 }
-                MetadataBlock(voteAverage = null, cast = item.cast)
-                if (item.mediaType == MediaType.Movie) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = item.watched,
-                            enabled = canMarkWatched,
-                            onCheckedChange = onWatchedChange,
-                        )
-                        Text(
-                            when {
-                                item.watched -> "Watched"
-                                canMarkWatched -> "Not watched"
-                                else -> "Not released"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
                 if (nextEpisode != null) {
                     Text(
-                        text = "Next: S${nextEpisode.seasonNumber} E${nextEpisode.episodeNumber} ${nextEpisode.title}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = "S${nextEpisode.seasonNumber} E${nextEpisode.episodeNumber}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = nextEpisode.title,
+                        style = MaterialTheme.typography.bodyLarge,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                }
-                if (item.mediaType == MediaType.Tv) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        OutlinedButton(
-                            onClick = onOpen,
-                            modifier = Modifier.weight(0.42f),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) {
-                            Text(
-                                text = "Episodes",
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Clip,
-                                softWrap = false,
-                            )
-                        }
-                        Button(
-                            onClick = { nextEpisode?.let(onWatchNext) },
-                            enabled = nextEpisode != null,
-                            modifier = Modifier.weight(0.58f),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) {
-                            Text(
-                                text = "Watch next",
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Clip,
-                                softWrap = false,
-                            )
-                        }
-                    }
+                } else if (metadataLoading) {
+                    Text(
+                        text = "Loading episode metadata...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = "No aired episodes pending",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
+            if (nextEpisode != null) {
+                MarkWatchedButton(onClick = { onWatchNext(nextEpisode) })
+            }
         }
+    }
+}
+
+@Composable
+private fun MetadataText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun MarkWatchedButton(onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .size(36.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
+    ) {
+        Box(modifier = Modifier.fillMaxSize())
     }
 }

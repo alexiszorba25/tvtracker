@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -130,6 +131,12 @@ private fun SuggestionsList(
         SearchSection.Popular -> suggestions
         SearchSection.ComingSoon -> upcoming
     }
+    val popularListState = rememberLazyListState()
+    val comingSoonListState = rememberLazyListState()
+    val activeListState = when (selectedSection) {
+        SearchSection.Popular -> popularListState
+        SearchSection.ComingSoon -> comingSoonListState
+    }
 
     when {
         loading -> CenteredProgress()
@@ -150,7 +157,10 @@ private fun SuggestionsList(
             if (items.isEmpty()) {
                 InfoPanel("Nothing to show here yet.")
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyColumn(
+                    state = activeListState,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     items(items, key = { "${selectedSection.name}-${it.key}" }) { item ->
                         SearchResultRow(
                             item = item,

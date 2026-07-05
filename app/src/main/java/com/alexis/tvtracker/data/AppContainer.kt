@@ -15,16 +15,11 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
 class AppContainer(context: Context) {
+    val applicationContext: Context = context.applicationContext
     val apiKeyRepository = ApiKeyRepository(context.applicationContext)
     val uiSettingsRepository = UiSettingsRepository(context.applicationContext)
 
-    private val database = Room.databaseBuilder(
-        context.applicationContext,
-        TvTrackerDatabase::class.java,
-        "tv-tracker.db",
-    )
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
-        .build()
+    private val database = getDatabase(context.applicationContext)
 
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
@@ -50,6 +45,7 @@ class AppContainer(context: Context) {
     val episodeRepository = EpisodeRepository(database.episodeDao())
     val tmdbRepository = TmdbRepository(tmdbApi, apiKeyRepository)
     val tvTimeImportRepository = TvTimeImportRepository(
+        context = context.applicationContext,
         tmdbRepository = tmdbRepository,
         libraryRepository = libraryRepository,
         episodeRepository = episodeRepository,
@@ -60,6 +56,23 @@ class AppContainer(context: Context) {
     )
 
     private companion object {
+        @Volatile
+        private var databaseInstance: TvTrackerDatabase? = null
+
+        fun getDatabase(context: Context): TvTrackerDatabase {
+            return databaseInstance ?: synchronized(this) {
+                databaseInstance ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    TvTrackerDatabase::class.java,
+                    "tv-tracker.db",
+                )
+                    .enableMultiInstanceInvalidation()
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .build()
+                    .also { databaseInstance = it }
+            }
+        }
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -81,6 +94,33 @@ class AppContainer(context: Context) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE library_items ADD COLUMN voteAverage REAL")
                 db.execSQL("ALTER TABLE library_items ADD COLUMN cast TEXT")
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE watched_episodes ADD COLUMN watchedAtMillis INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS episode_metadata_status (
+                        showId INTEGER NOT NULL PRIMARY KEY,
+                        complete INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE episode_metadata_status ADD COLUMN lastSeasonNumber INTEGER")
+                db.execSQL("ALTER TABLE episode_metadata_status ADD COLUMN totalSeasons INTEGER")
+                db.execSQL("ALTER TABLE episode_metadata_status ADD COLUMN updatedAtMillis INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

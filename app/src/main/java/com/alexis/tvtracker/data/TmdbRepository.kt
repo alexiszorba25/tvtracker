@@ -47,12 +47,21 @@ class TmdbRepository(
             .also { cachedUpcoming = it }
     }
 
-    suspend fun findTvByTvdbId(tvdbId: Int): SearchItem? {
-        return api.findByExternalId(tvdbId, "tvdb_id")
+    suspend fun findTvByTvdbId(
+        tvdbId: Int,
+        expectedTitle: String? = null,
+        enrich: Boolean = true,
+    ): SearchItem? {
+        val externalMatch = api.findByExternalId(tvdbId, "tvdb_id")
             .tvResults
             .toSearchItems(defaultMediaType = MediaType.Tv)
             .firstOrNull()
-            ?.withDetails()
+            ?.let { item -> if (enrich) item.withDetails() else item }
+        if (expectedTitle.isNullOrBlank() || externalMatch?.title.isLikelySameTitle(expectedTitle)) {
+            return externalMatch
+        }
+        return search(expectedTitle)
+            .firstOrNull { it.mediaType == MediaType.Tv && it.title.isLikelySameTitle(expectedTitle) }
     }
 
     suspend fun firstUnwatchedEpisode(
@@ -110,6 +119,22 @@ class TmdbRepository(
 
     suspend fun getSeason(showId: Int, seasonNumber: Int) = api.getSeason(showId, seasonNumber)
 
+    suspend fun tvByTmdbId(id: Int, enrich: Boolean = true): SearchItem? {
+        return runCatching {
+            val details = api.getTvDetails(id)
+            SearchItem(
+                id = details.id,
+                mediaType = MediaType.Tv,
+                title = details.name,
+                overview = details.overview.orEmpty(),
+                posterPath = details.posterPath,
+                releaseDate = details.firstAirDate,
+                voteAverage = details.voteAverage,
+                cast = if (enrich) details.credits?.cast?.mainCast() else null,
+            )
+        }.getOrNull()
+    }
+
     suspend fun enrich(item: SearchItem): SearchItem = item.withDetails()
 
     private suspend fun List<SearchItem>.withDetails(limit: Int): List<SearchItem> {
@@ -138,6 +163,31 @@ class TmdbRepository(
             }
         }.getOrDefault(this)
     }
+}
+
+private fun String?.isLikelySameTitle(other: String): Boolean {
+    val left = this.normalizedTitle()
+    val right = other.normalizedTitle()
+    if (left.isBlank() || right.isBlank()) return false
+    if (left == right) return true
+    if ((left.length >= 5 && right.contains(left)) || (right.length >= 5 && left.contains(right))) {
+        return true
+    }
+    val leftTokens = left.split(" ").filter { it.isNotBlank() }.toSet()
+    val rightTokens = right.split(" ").filter { it.isNotBlank() }.toSet()
+    if (leftTokens.isEmpty() || rightTokens.isEmpty()) return false
+    val overlap = leftTokens.intersect(rightTokens).size.toDouble()
+    val total = leftTokens.union(rightTokens).size.toDouble()
+    return overlap / total >= 0.75
+}
+
+private fun String?.normalizedTitle(): String {
+    return orEmpty()
+        .lowercase()
+        .replace(Regex("\\([^)]*\\)"), " ")
+        .replace("&", " and ")
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
 }
 
 fun List<com.alexis.tvtracker.data.remote.TmdbCastMember>.mainCast(): String? {
