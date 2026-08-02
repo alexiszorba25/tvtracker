@@ -81,9 +81,12 @@ data class LibraryUiState(
     val continueWatchingItems: List<LibraryItemEntity>
         get() = filteredSeries.filter { item ->
             item.needsEpisodeMetadata ||
-                (nextEpisodes[item.tmdbId] != null && (!item.hasStaleViewingHistory || item.hasNewNextEpisode))
+                (
+                    nextEpisodes[item.tmdbId] != null &&
+                        (!item.hasStaleViewingHistory || item.hasNewNextEpisode || item.hasRecentSeasonPremiere)
+                )
         }.sortedWith(
-            compareByDescending<LibraryItemEntity> { it.hasNewNextEpisode }
+            compareByDescending<LibraryItemEntity> { it.hasNewNextEpisode || it.hasRecentSeasonPremiere }
                 .thenByDescending { lastWatchedAtByShow[it.tmdbId] ?: Long.MIN_VALUE }
                 .thenBy { it.title.lowercase() },
         )
@@ -93,7 +96,8 @@ data class LibraryUiState(
             !item.needsEpisodeMetadata &&
                 nextEpisodes[item.tmdbId] != null &&
                 item.hasStaleViewingHistory &&
-                !item.hasNewNextEpisode
+                !item.hasNewNextEpisode &&
+                !item.hasRecentSeasonPremiere
         }.sortedWith(
             compareByDescending<LibraryItemEntity> {
                 nextEpisodes[it.tmdbId]?.airDate.orEmpty()
@@ -123,6 +127,14 @@ data class LibraryUiState(
 
     private val LibraryItemEntity.hasNewNextEpisode: Boolean
         get() = airedWithinLastDays(nextEpisodes[tmdbId]?.airDate)
+
+    private val LibraryItemEntity.hasRecentSeasonPremiere: Boolean
+        get() {
+            val nextEpisode = nextEpisodes[tmdbId] ?: return false
+            return nextEpisode.seasonNumber > 1 &&
+                nextEpisode.episodeNumber == 1 &&
+                airedWithinLastDays(nextEpisode.airDate, STALE_WATCHING_DAYS)
+        }
 
     val loadingEpisodeMetadataShowIds: Set<Int>
         get() = filteredSeries
@@ -550,4 +562,5 @@ private val MediaType.label: String
         MediaType.Tv -> "series"
     }
 
-private val STALE_WATCHING_MILLIS = TimeUnit.DAYS.toMillis(30)
+private const val STALE_WATCHING_DAYS = 30L
+private val STALE_WATCHING_MILLIS = TimeUnit.DAYS.toMillis(STALE_WATCHING_DAYS)
