@@ -17,8 +17,8 @@ import com.alexis.tvtracker.MainActivity
 import com.alexis.tvtracker.R
 import com.alexis.tvtracker.data.AppContainer
 import com.alexis.tvtracker.model.MediaType
+import com.alexis.tvtracker.util.airedWithinLastDays
 import com.alexis.tvtracker.util.hasAired
-import java.time.LocalDate
 
 class NewEpisodeWorker(
     appContext: Context,
@@ -55,7 +55,7 @@ class NewEpisodeWorker(
                             .sortedBy { it.episodeNumber }
                             .filter { episode ->
                                 hasAired(episode.airDate) &&
-                                    airedRecently(episode.airDate) &&
+                                    airedWithinLastDays(episode.airDate) &&
                                     (season.seasonNumber to episode.episodeNumber) !in watchedForShow
                             }
                             .forEach { episode ->
@@ -76,15 +76,6 @@ class NewEpisodeWorker(
         }
 
         return Result.success()
-    }
-
-    private fun airedRecently(date: String?): Boolean {
-        if (date.isNullOrBlank()) return false
-        return runCatching {
-            val airedAt = LocalDate.parse(date)
-            val today = LocalDate.now()
-            !airedAt.isAfter(today) && !airedAt.isBefore(today.minusDays(7))
-        }.getOrDefault(false)
     }
 
     private fun showNotification(notificationId: Int, title: String, text: String): Boolean {

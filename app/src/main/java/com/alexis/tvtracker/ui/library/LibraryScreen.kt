@@ -64,6 +64,7 @@ import com.alexis.tvtracker.ui.common.MediaPoster
 import com.alexis.tvtracker.ui.common.RatingText
 import com.alexis.tvtracker.ui.common.MoreVertButton
 import com.alexis.tvtracker.ui.label
+import com.alexis.tvtracker.util.airedWithinLastDays
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.delay
@@ -769,12 +770,41 @@ private fun WatchNextRow(
                     RatingText(item.voteAverage)
                 }
                 if (nextEpisode != null) {
-                    Text(
-                        text = "S${nextEpisode.seasonNumber} E${nextEpisode.episodeNumber}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "S${nextEpisode.seasonNumber}E${nextEpisode.episodeNumber}",
+                            modifier = Modifier.alignByBaseline(),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (nextEpisode.remainingEpisodeCount > 0) {
+                            Text(
+                                text = "+${nextEpisode.remainingEpisodeCount}",
+                                modifier = Modifier.alignByBaseline(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        if (airedWithinLastDays(nextEpisode.airDate)) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Text(
+                                    text = "NEW",
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = nextEpisode.title,
                         style = MaterialTheme.typography.bodyLarge,
@@ -823,6 +853,16 @@ private fun MarkWatchedButton(onClick: () -> Unit) {
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
     ) {
-        Box(modifier = Modifier.fillMaxSize())
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "✓",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }

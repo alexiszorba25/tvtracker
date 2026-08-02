@@ -205,4 +205,5 @@ data class NextEpisode(
     val episodeNumber: Int,
     val title: String,
     val airDate: String?,
+    val remainingEpisodeCount: Int = 0,
 )

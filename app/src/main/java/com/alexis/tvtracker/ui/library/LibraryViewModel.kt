@@ -36,6 +36,7 @@ import com.alexis.tvtracker.metadata.PROGRESS_PROCESSED_SHOWS
 import com.alexis.tvtracker.metadata.PROGRESS_TOTAL_SHOWS
 import com.alexis.tvtracker.metadata.enqueueEpisodeMetadataWork
 import com.alexis.tvtracker.model.MediaType
+import com.alexis.tvtracker.util.airedWithinLastDays
 import com.alexis.tvtracker.util.hasAired
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,13 +80,25 @@ data class LibraryUiState(
 
     val continueWatchingItems: List<LibraryItemEntity>
         get() = filteredSeries.filter { item ->
-            item.needsEpisodeMetadata || (nextEpisodes[item.tmdbId] != null && !item.hasStaleViewingHistory)
-        }
+            item.needsEpisodeMetadata ||
+                (nextEpisodes[item.tmdbId] != null && (!item.hasStaleViewingHistory || item.hasNewNextEpisode))
+        }.sortedWith(
+            compareByDescending<LibraryItemEntity> { it.hasNewNextEpisode }
+                .thenByDescending { lastWatchedAtByShow[it.tmdbId] ?: Long.MIN_VALUE }
+                .thenBy { it.title.lowercase() },
+        )
 
     val staleWatchingItems: List<LibraryItemEntity>
         get() = filteredSeries.filter { item ->
-            !item.needsEpisodeMetadata && nextEpisodes[item.tmdbId] != null && item.hasStaleViewingHistory
-        }
+            !item.needsEpisodeMetadata &&
+                nextEpisodes[item.tmdbId] != null &&
+                item.hasStaleViewingHistory &&
+                !item.hasNewNextEpisode
+        }.sortedWith(
+            compareByDescending<LibraryItemEntity> {
+                nextEpisodes[it.tmdbId]?.airDate.orEmpty()
+            }.thenBy { it.title.lowercase() },
+        )
 
     val upToDateItems: List<LibraryItemEntity>
         get() = filteredSeries.filter { item ->
@@ -107,6 +120,9 @@ data class LibraryUiState(
             val lastWatchedAt = lastWatchedAtByShow[tmdbId] ?: return false
             return lastWatchedAt < System.currentTimeMillis() - STALE_WATCHING_MILLIS
         }
+
+    private val LibraryItemEntity.hasNewNextEpisode: Boolean
+        get() = airedWithinLastDays(nextEpisodes[tmdbId]?.airDate)
 
     val loadingEpisodeMetadataShowIds: Set<Int>
         get() = filteredSeries
@@ -436,11 +452,13 @@ class LibraryViewModel(
 
         return series.mapNotNull { item ->
             val watchedForShow = watchedByShow[item.tmdbId].orEmpty()
-            cachedByShow[item.tmdbId]
-                ?.firstOrNull { episode ->
+            val pendingEpisodes = cachedByShow[item.tmdbId]
+                ?.filter { episode ->
                     hasAired(episode.airDate) &&
                         (episode.seasonNumber to episode.episodeNumber) !in watchedForShow
                 }
+                .orEmpty()
+            pendingEpisodes.firstOrNull()
                 ?.let { episode ->
                     item.tmdbId to NextEpisode(
                         showId = item.tmdbId,
@@ -448,6 +466,7 @@ class LibraryViewModel(
                         episodeNumber = episode.episodeNumber,
                         title = episode.title,
                         airDate = episode.airDate,
+                        remainingEpisodeCount = (pendingEpisodes.size - 1).coerceAtLeast(0),
                     )
                 }
         }.toMap()
